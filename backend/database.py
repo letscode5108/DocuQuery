@@ -37,7 +37,7 @@ from dotenv import load_dotenv
 load_dotenv()
 # Your Neon database connection string - ensure this is correctly set
 DATABASE_URL = os.getenv("DATABASE_URL")
-print(f"Database URL: {DATABASE_URL}")
+
 
 # Create engine with improved connection settings
 engine = create_engine(

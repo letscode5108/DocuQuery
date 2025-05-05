@@ -29,13 +29,15 @@
 #     finally:
 #         db.close()
 
-
+import os
 from sqlalchemy import create_engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
-
+from dotenv import load_dotenv
+load_dotenv()
 # Your Neon database connection string - ensure this is correctly set
-DATABASE_URL = "postgresql://neondb_owner:npg_ExGsXbOuT6N4@ep-cold-term-a42ab29p-pooler.us-east-1.aws.neon.tech/neondb?sslmode=require"
+DATABASE_URL = os.getenv("DATABASE_URL")
+print(f"Database URL: {DATABASE_URL}")
 
 # Create engine with improved connection settings
 engine = create_engine(

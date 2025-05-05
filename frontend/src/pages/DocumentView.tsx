@@ -11,7 +11,7 @@ interface Document {
   file_size: number;
   mime_type: string;
   upload_date: string;
-  created_at: string; // Added actual creation date field
+  created_at: string; 
   user_id: number;
 }
 
@@ -21,7 +21,7 @@ interface Query {
   answer: string;
   document_id: number;
   timestamp: string;
-  created_at: string; // Added actual creation timestamp
+  created_at: string; 
   session_id?: number;
 }
 
@@ -46,7 +46,7 @@ const DocumentView: React.FC = () => {
   const chatContainerRef = useRef<HTMLDivElement>(null);
 
   // API base URL
-  const API_BASE_URL = 'http://localhost:8000/api';
+  const API_BASE_URL = import.meta.env.VITE_API_URL;
 
   // Fetch all documents on component mount
   useEffect(() => {
@@ -63,7 +63,7 @@ const DocumentView: React.FC = () => {
   // Fetch all documents
   const fetchDocuments = async () => {
     try {
-      const response = await axios.get(`${API_BASE_URL}/documents/`);
+      const response = await axios.get(`${API_BASE_URL}/api/documents/`);
       setDocuments(response.data);
     } catch (err) {
       console.error('Error fetching documents:', err);
@@ -74,10 +74,10 @@ const DocumentView: React.FC = () => {
   // Fetch a specific document's details and its queries
   const fetchDocumentDetails = async (documentId: number) => {
     try {
-      const docResponse = await axios.get(`${API_BASE_URL}/documents/${documentId}`);
+      const docResponse = await axios.get(`${API_BASE_URL}/api/documents/${documentId}`);
       setSelectedDocument(docResponse.data);
       
-      const queriesResponse = await axios.get(`${API_BASE_URL}/queries/${documentId}`);
+      const queriesResponse = await axios.get(`${API_BASE_URL}/api/queries/${documentId}`);
       setDocumentQueries(queriesResponse.data);
     } catch (err) {
       console.error('Error fetching document details:', err);
@@ -88,7 +88,7 @@ const DocumentView: React.FC = () => {
   // Create a new session for document
   const createSession = async (documentId: number) => {
     try {
-      const response = await axios.post(`${API_BASE_URL}/sessions/?document_id=${documentId}`);
+      const response = await axios.post(`${API_BASE_URL}/api/sessions/?document_id=${documentId}`);
       setCurrentSession(response.data);
       return response.data.session_id;
     } catch (err) {
@@ -133,7 +133,7 @@ const DocumentView: React.FC = () => {
       formData.append('file', file);
       formData.append('title', documentTitle);
       
-      const response = await axios.post(`${API_BASE_URL}/documents/`, formData, {
+      const response = await axios.post(`${API_BASE_URL}/api/documents/`, formData, {
         headers: {
           'Content-Type': 'multipart/form-data'
         }
@@ -185,7 +185,7 @@ const DocumentView: React.FC = () => {
       formData.append('question', question);
       
       const response = await axios.post(
-        `${API_BASE_URL}/sessions/${currentSession.session_id}/query`, 
+        `${API_BASE_URL}/api/sessions/${currentSession.session_id}/query`, 
         formData
       );
       

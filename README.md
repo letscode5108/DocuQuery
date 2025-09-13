@@ -1,4 +1,4 @@
-# PDF Document Q&A System
+# DocuQuery
 
 A full-stack application that allows users to upload PDF documents and ask questions about their content using AI-powered natural language processing.
 

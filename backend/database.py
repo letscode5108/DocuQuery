@@ -78,6 +78,6 @@ if __name__ == "__main__":
         with engine.connect() as connection:
             from sqlalchemy import text
             result = connection.execute(text("SELECT 1")).fetchone()
-            print(f"✅ Database connection successful: {result}")
+            print(f"Database connection successful: {result}")
     except Exception as e:
-        print(f"❌ Database connection failed: {e}")
+        print(f" Database connection failed: {e}")

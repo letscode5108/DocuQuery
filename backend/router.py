@@ -3,126 +3,176 @@ from fastapi import APIRouter, Depends, File, UploadFile, HTTPException, Form, s
 from sqlalchemy.orm import Session
 from typing import List, Optional
 import os
-import tempfile
 import fitz  # PyMuPDF
 import cloudinary
 import cloudinary.uploader
-from cloudinary import api as cloudinary_api 
 import uuid
 from datetime import datetime
 from dotenv import load_dotenv
+from google import genai
+from pinecone import Pinecone, ServerlessSpec
+import io
+
 load_dotenv()
-from langchain_community.embeddings import HuggingFaceEmbeddings
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_community.vectorstores import FAISS
-from langchain.chains import RetrievalQA
-# Import necessary packages for the new pipeline approach
-from langchain_community.llms import HuggingFacePipeline
-from transformers import AutoModelForSeq2SeqLM, AutoTokenizer, pipeline
 
 from database import get_db
 import models
 import schemas
 
+# Cloudinary configuration
+cloudinary.config(
+    cloud_name=os.getenv("CLOUDINARY_CLOUD_NAME"),
+    api_key=os.getenv("CLOUDINARY_API_KEY"),
+    api_secret=os.getenv("CLOUDINARY_API_SECRET")
+)
+
+# Google AI configuration
+client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
+
+# Pinecone configuration
+pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
+INDEX_NAME = "pdf-documents"
+
+# Delete old index if it exists with wrong dimension
+if INDEX_NAME in pc.list_indexes().names():
+    try:
+        index_info = pc.describe_index(INDEX_NAME)
+        if index_info.dimension != 3072:  
+            print(f"Deleting old index with dimension {index_info.dimension}")
+            pc.delete_index(INDEX_NAME)
+            print("Old index deleted")
+    except:
+        pass
+
+# Create index if it doesn't exist
+if INDEX_NAME not in pc.list_indexes().names():
+    pc.create_index(
+        name=INDEX_NAME,
+        dimension=3072,  
+        metric="cosine",
+        spec=ServerlessSpec(cloud="aws", region="us-east-1")
+    )
+    print("New index created with dimension 3072")
+
+index = pc.Index(INDEX_NAME)
+
 router = APIRouter()
 
-# Initialize HuggingFace embeddings
-embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-mpnet-base-v2")
 
-# Initialize HuggingFace pipeline for language model
-# This replaces the previous HuggingFaceHub initialization
-try:
-    model_id = "google/flan-t5-base"
-    tokenizer = AutoTokenizer.from_pretrained(model_id)
-    model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
+class SimpleTextSplitter:
+    def __init__(self, chunk_size=1000, chunk_overlap=200):
+        self.chunk_size = chunk_size
+        self.chunk_overlap = chunk_overlap
     
-    pipe = pipeline(
-        "text2text-generation",
-        model=model, 
-        tokenizer=tokenizer,
-        max_length=512,
-        temperature=0.2,
-    )
-    
-    llm = HuggingFacePipeline(pipeline=pipe)
-    
-except Exception as e:
-    print(f"Error initializing language model: {str(e)}")
-    # Provide a fallback or raise an exception based on your application's needs
-    # For now, we'll set llm to None and check for it before use
-    llm = None
+    def split_text(self, text):
+        chunks = []
+        start = 0
+        text_length = len(text)
+        
+        while start < text_length:
+            end = start + self.chunk_size
+            chunk = text[start:end]
+            chunks.append(chunk)
+            start += self.chunk_size - self.chunk_overlap
+        
+        return chunks
 
-# Document processing and vector store cache
-document_vectorstores = {}
 
-def extract_text_from_pdf(file_path):
-    """Extract text from a PDF file using PyMuPDF"""
+def extract_text_from_pdf(file_bytes):
+    """Extract text from PDF bytes using PyMuPDF"""
     text = ""
     try:
-        with fitz.open(file_path) as doc:
+        with fitz.open(stream=file_bytes, filetype="pdf") as doc:
             for page in doc:
                 text += page.get_text()
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error extracting text from PDF: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error extracting text: {str(e)}")
     return text
 
-def create_vectorstore(text, document_id):
-    """Create a vector store from document text"""
+
+def get_embeddings(texts: List[str]):
+    """Get embeddings using Google's gemini-embedding-001 model"""
     try:
-        text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=1000,
-            chunk_overlap=200
-        )
+        embeddings = []
+        for text in texts:
+            result = client.models.embed_content(
+                model="models/gemini-embedding-001",
+                contents=text
+            )
+            # Access the values list
+            embeddings.append(result.embeddings[0].values)
+        return embeddings
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Embedding error: {str(e)}")
+def create_vectorstore(text, document_id):
+    """Create vectors and upload to Pinecone"""
+    try:
+        text_splitter = SimpleTextSplitter(chunk_size=1000, chunk_overlap=200)
         chunks = text_splitter.split_text(text)
         
-        # Create vector store
-        vectorstore = FAISS.from_texts(chunks, embeddings)
+        # Get embeddings for all chunks
+        embeddings = get_embeddings(chunks)
         
-        # Cache the vector store with the document ID
-        document_vectorstores[document_id] = vectorstore
+        # Prepare vectors for Pinecone
+        vectors = []
+        for i, (chunk, embedding) in enumerate(zip(chunks, embeddings)):
+            vectors.append({
+                "id": f"doc_{document_id}_chunk_{i}",
+                "values": embedding,
+                "metadata": {
+                    "document_id": document_id,
+                    "chunk_index": i,
+                    "text": chunk
+                }
+            })
         
-        return vectorstore
+        # Upsert to Pinecone in batches
+        batch_size = 100
+        for i in range(0, len(vectors), batch_size):
+            batch = vectors[i:i + batch_size]
+            index.upsert(vectors=batch, namespace=f"doc_{document_id}")
+        
+        return len(vectors)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error creating vector store: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Vector store error: {str(e)}")
 
 @router.post("/documents/", response_model=schemas.DocumentResponse)
 async def upload_document(
-    title: str = Form(...),
     file: UploadFile = File(...),
+    title: Optional[str] = Form(None),  
     db: Session = Depends(get_db)
 ):
-    """Upload a PDF document, process it, and store in the database"""
-    # Validate file type
+    """Upload PDF, process it, and store vectors in Pinecone"""
     if not file.filename.endswith('.pdf'):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Only PDF files are allowed"
+            detail="Only PDF files allowed"
         )
     
     try:
-        # Save the uploaded file temporarily
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as temp_file:
-            temp_file.write(await file.read())
-            temp_path = temp_file.name
+        # Read file into memory
+        file_bytes = await file.read()
+        file_size = len(file_bytes)
+        
+        # Use provided title or extract from filename
+        if not title or title.strip() == '':
+            # Remove .pdf extension and clean up filename
+            title = file.filename.replace('.pdf', '').replace('_', ' ').replace('-', ' ')
         
         # Upload to Cloudinary
         public_id = f"pdf_docs/{str(uuid.uuid4())}"
         upload_result = cloudinary.uploader.upload(
-            temp_path,
+            file_bytes,
             resource_type="raw",
             public_id=public_id,
-            type="upload",  
             folder="pdf_documents",
             access_mode="public"
         )
         
-        # Get file size
-        file_size = os.path.getsize(temp_path)
+        # Extract text
+        text = extract_text_from_pdf(file_bytes)
         
-        # Extract text from PDF
-        text = extract_text_from_pdf(temp_path)
-        
-        # Create database entry
+        # Create DB entry
         db_document = models.Document(
             title=title,
             filename=file.filename,
@@ -130,96 +180,72 @@ async def upload_document(
             public_id=upload_result.get("public_id"),
             file_size=file_size,
             mime_type="application/pdf",
-            user_id=1  # Default user for now, replace with authenticated user later
+            user_id=1
         )
         
         db.add(db_document)
         db.commit()
         db.refresh(db_document)
         
-        # Process document and create vector store
-        create_vectorstore(text, db_document.id)
-        
-        # Clean up the temporary file
-        os.unlink(temp_path)
+        # Process and upload to Pinecone
+        chunk_count = create_vectorstore(text, db_document.id)
         
         return db_document
     
     except Exception as e:
-        # Clean up temporary file if it exists
-        if 'temp_path' in locals():
-            os.unlink(temp_path)
-        raise HTTPException(status_code=500, detail=f"Error uploading document: {str(e)}")
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Upload error: {str(e)}")
+
+
+
+
 
 @router.post("/query/", response_model=schemas.QueryResponse)
 async def ask_question(
     query: schemas.QueryCreate,
     db: Session = Depends(get_db)
 ):
-    """Process a question about a document and return the answer"""
-    # Check if language model is available
-    if llm is None:
-        raise HTTPException(
-            status_code=500, 
-            detail="Language model is not initialized. Please check the server logs."
-        )
-    
-    # Check if document exists
+    """Ask question about a document using Gemini"""
     document = db.query(models.Document).filter(models.Document.id == query.document_id).first()
     if not document:
         raise HTTPException(status_code=404, detail="Document not found")
     
     try:
-        # Get vectorstore for document
-        vectorstore = document_vectorstores.get(query.document_id)
+        # Get query embedding
+        query_result = client.models.embed_content(
+            model="models/gemini-embedding-001",
+            contents=query.question
+        )
+        query_embedding = query_result.embeddings[0].values  
         
-        # If vectorstore doesn't exist in cache, recreate it
-        if not vectorstore:
-            # Create temporary file for downloading
-            temp_path = None
-            try:
-                with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as temp_file:
-                    temp_path = temp_file.name
-                
-                # Use requests to download the file from the Cloudinary URL
-                response = requests.get(document.cloudinary_url)
-                if response.status_code != 200:
-                    raise HTTPException(
-                        status_code=500, 
-                        detail=f"Error downloading file from Cloudinary: HTTP {response.status_code}"
-                    )
-                
-                # Write content to temporary file
-                with open(temp_path, 'wb') as f:
-                    f.write(response.content)
-                
-                # Extract text
-                text = extract_text_from_pdf(temp_path)
-                
-                # Create vector store
-                vectorstore = create_vectorstore(text, document.id)
-                
-            except Exception as e:
-                raise HTTPException(status_code=500, detail=f"Error processing document: {str(e)}")
-            finally:
-                # Clean up temporary file
-                if temp_path and os.path.exists(temp_path):
-                    os.unlink(temp_path)
-        
-        # Create retrieval QA chain
-        retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
-        qa_chain = RetrievalQA.from_chain_type(
-            llm=llm,
-            chain_type="stuff",
-            retriever=retriever,
-            return_source_documents=False
+        # Search Pinecone
+        results = index.query(
+            vector=query_embedding,
+            top_k=3,
+            namespace=f"doc_{query.document_id}",
+            include_metadata=True
         )
         
-        # Get answer
-        result = qa_chain({"query": query.question})
-        answer = result.get("result", "Sorry, I couldn't find an answer based on the document.")
+        # Extract context
+        context = "\n\n".join([match['metadata']['text'] for match in results['matches']])
         
-        # Save query to database
+        # Generate answer with Gemini
+        prompt = f"""Based on the following context, answer the question. If the answer isn't in the context, say "I cannot find the answer in the document."
+
+Context:
+{context}
+
+Question: {query.question}
+
+Answer:"""
+        
+        response = client.models.generate_content(
+            model='models/gemini-2.5-flash',
+            contents=prompt
+        )
+        answer = response.text.strip()
+        
+        # Save to DB
         db_query = models.Query(
             question=query.question,
             answer=answer,
@@ -233,43 +259,188 @@ async def ask_question(
         return db_query
     
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error processing query: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Query error: {str(e)}")
+
+@router.post("/query-all/")
+async def ask_question_all_documents(
+    question: str = Form(...),
+    db: Session = Depends(get_db)
+):
+    """Ask question across ALL documents"""
+    
+    all_documents = db.query(models.Document).all()
+    
+    if not all_documents:
+        raise HTTPException(status_code=404, detail="No documents found")
+    
+    try:
+        query_result = client.models.embed_content(
+            model="models/gemini-embedding-001",
+            contents=question
+        )
+        query_embedding = query_result.embeddings[0].values
+        
+        all_results = []
+        for doc in all_documents:
+            try:
+                results = index.query(
+                    vector=query_embedding,
+                    top_k=3,  # Get top 3 chunks per document
+                    namespace=f"doc_{doc.id}",
+                    include_metadata=True
+                )
+                
+                for match in results.get('matches', []):
+                    match['document_title'] = doc.title
+                    match['document_id'] = doc.id
+                    match['document_filename'] = doc.filename
+                    all_results.append(match)
+            except:
+                continue
+        
+        if not all_results:
+            raise HTTPException(status_code=404, detail="No relevant content found")
+        
+        all_results.sort(key=lambda x: x['score'], reverse=True)
+        top_results = all_results[:6]  # Use top 6 chunks for context
+        
+        # Build context
+        context_parts = []
+        for i, match in enumerate(top_results, 1):
+            context_parts.append(
+                f"[Source {i}: {match['document_title']}]\n{match['metadata']['text']}"
+            )
+        
+        context = "\n\n".join(context_parts)
+        
+        # Generate answer
+        prompt = f"""Based on the following context from multiple documents, answer the question. 
+When answering, refer to sources by their document name.
+
+Context:
+{context}
+
+Question: {question}
+
+Answer:"""
+        
+        response = client.models.generate_content(
+            model='models/gemini-2.5-flash',
+            contents=prompt
+        )
+        answer = response.text.strip()
+        
+        #  Group by unique documents with highest relevance score
+        unique_sources = {}
+        for match in top_results:
+            doc_id = match['document_id']
+            if doc_id not in unique_sources or match['score'] > unique_sources[doc_id]['relevance_score']:
+                unique_sources[doc_id] = {
+                    "document_id": doc_id,
+                    "document_title": match['document_title'],
+                    "filename": match['document_filename'],
+                    "relevance_score": float(match['score'])
+                }
+        
+        # Convert to list and sort by relevance
+        sources = sorted(unique_sources.values(), key=lambda x: x['relevance_score'], reverse=True)
+        
+        # Save to DB
+        db_query = models.Query(
+            question=question,
+            answer=answer,
+            document_id=None
+        )
+        
+        db.add(db_query)
+        db.commit()
+        db.refresh(db_query)
+        
+        return {
+            "id": db_query.id,
+            "question": db_query.question,
+            "answer": db_query.answer,
+            "document_id": None,
+            "created_at": db_query.created_at,
+            "sources": sources  
+        }
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Query error: {str(e)}")
+
+
+
+@router.get("/test-embedding")
+async def test_embedding():
+    """Test embedding to see response structure"""
+    try:
+        result = client.models.embed_content(
+            model="models/gemini-embedding-001",
+            contents="test text"
+        )
+        return {
+            "type": str(type(result)),
+            "dir": dir(result),
+            "result": str(result)
+        }
+    except Exception as e:
+        return {"error": str(e)}
+     
+
+@router.get("/test-models")
+async def test_models():
+    """Test to see available models"""
+    try:
+        models_list = []
+        for model in client.models.list():
+            models_list.append(model.name)
+        return {"available_models": models_list}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+
+@router.get("/queries/all")
+async def get_all_docs_queries(db: Session = Depends(get_db)):
+    """Get all queries where document_id is null (multi-doc queries)"""
+    return db.query(models.Query).filter(
+        models.Query.document_id == None
+    ).order_by(models.Query.created_at.desc()).all()
 
 @router.get("/documents/", response_model=List[schemas.DocumentResponse])
 async def list_documents(db: Session = Depends(get_db)):
-    """List all uploaded documents"""
-    documents = db.query(models.Document).all()
-    return documents
+    """List all documents"""
+    return db.query(models.Document).all()
+
 
 @router.get("/documents/{document_id}", response_model=schemas.DocumentResponse)
 async def get_document(document_id: int, db: Session = Depends(get_db)):
-    """Get a specific document by ID"""
+    """Get specific document"""
     document = db.query(models.Document).filter(models.Document.id == document_id).first()
     if not document:
         raise HTTPException(status_code=404, detail="Document not found")
     return document
 
+
 @router.get("/queries/{document_id}", response_model=List[schemas.QueryResponse])
 async def get_document_queries(document_id: int, db: Session = Depends(get_db)):
-    """Get all queries for a specific document"""
+    """Get all queries for a document"""
     document = db.query(models.Document).filter(models.Document.id == document_id).first()
     if not document:
         raise HTTPException(status_code=404, detail="Document not found")
     
-    queries = db.query(models.Query).filter(models.Query.document_id == document_id).all()
-    return queries
+    return db.query(models.Query).filter(models.Query.document_id == document_id).all()
+
 
 @router.post("/sessions/", response_model=dict)
 async def create_session(document_id: int, db: Session = Depends(get_db)):
-    """Create a new question-answering session for a document"""
+    """Create new session"""
     document = db.query(models.Document).filter(models.Document.id == document_id).first()
     if not document:
         raise HTTPException(status_code=404, detail="Document not found")
     
-    # Create session ID
     session_id = str(uuid.uuid4())
     
-    # Create session in database
     db_session = models.Session(
         session_id=session_id,
         document_id=document_id
@@ -281,286 +452,30 @@ async def create_session(document_id: int, db: Session = Depends(get_db)):
     
     return {"session_id": session_id, "document_id": document_id}
 
+
 @router.post("/sessions/{session_id}/query", response_model=schemas.QueryResponse)
 async def session_query(
     session_id: str, 
     question: str = Form(...),
     db: Session = Depends(get_db)
 ):
-    """Process a question within a session"""
-    # Check if language model is available
-    if llm is None:
-        raise HTTPException(
-            status_code=500, 
-            detail="Language model is not initialized. Please check the server logs."
-        )
-    
-    # Find session
+    """Query within a session"""
     session = db.query(models.Session).filter(models.Session.session_id == session_id).first()
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     
-    # Update last accessed time
     session.last_accessed = datetime.now()
     db.commit()
     
-    # Create query object
     query = schemas.QueryCreate(
         question=question,
         document_id=session.document_id
     )
     
-    # Process question and get answer
     response = await ask_question(query, db)
     
-    # Update the query with session_id
     db_query = db.query(models.Query).filter(models.Query.id == response.id).first()
     db_query.session_id = session.id
     db.commit()
     
     return response
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

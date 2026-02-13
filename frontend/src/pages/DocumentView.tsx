@@ -10,57 +10,54 @@ interface Document {
   public_id: string;
   file_size: number;
   mime_type: string;
-  upload_date: string;
-  created_at: string; 
-  user_id: number;
+  created_at: string;
+}
+
+interface Source {
+  document_id: number;
+  document_title: string;
+  filename: string;
+  relevance_score: number;
 }
 
 interface Query {
   id: number;
   question: string;
   answer: string;
-  document_id: number;
-  timestamp: string;
-  created_at: string; 
-  session_id?: number;
-}
-
-interface Session {
-  session_id: string;
-  document_id: number;
+  document_id: number | null;
+  created_at: string;
+  sources?: Source[];
 }
 
 const DocumentView: React.FC = () => {
-  // State variables
   const [documents, setDocuments] = useState<Document[]>([]);
   const [selectedDocument, setSelectedDocument] = useState<Document | null>(null);
   const [documentQueries, setDocumentQueries] = useState<Query[]>([]);
-  const [currentSession, setCurrentSession] = useState<Session | null>(null);
+  const [allDocsQueries, setAllDocsQueries] = useState<Query[]>([]);
   const [question, setQuestion] = useState('');
   const [loading, setLoading] = useState(false);
   const [file, setFile] = useState<File | null>(null);
   const [documentTitle, setDocumentTitle] = useState('');
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [searchMode, setSearchMode] = useState<'single' | 'all'>('all');
+  const [viewMode, setViewMode] = useState<'chat' | 'allDocs'>('allDocs');
   
   const chatContainerRef = useRef<HTMLDivElement>(null);
 
-  // API base URL
-  const API_BASE_URL = import.meta.env.VITE_API_URL;
+  const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
-  // Fetch all documents on component mount
   useEffect(() => {
     fetchDocuments();
+    fetchAllDocsQueries();
   }, []);
 
-  // Scroll to bottom of chat when queries change
   useEffect(() => {
     if (chatContainerRef.current) {
       chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
     }
-  }, [documentQueries]);
+  }, [documentQueries, allDocsQueries]);
 
-  // Fetch all documents
   const fetchDocuments = async () => {
     try {
       const response = await axios.get(`${API_BASE_URL}/api/documents/`);
@@ -71,7 +68,15 @@ const DocumentView: React.FC = () => {
     }
   };
 
-  // Fetch a specific document's details and its queries
+  const fetchAllDocsQueries = async () => {
+    try {
+      const response = await axios.get(`${API_BASE_URL}/api/queries/all`);
+      setAllDocsQueries(response.data);
+    } catch (err) {
+      console.error('Error fetching all-docs queries:', err);
+    }
+  };
+
   const fetchDocumentDetails = async (documentId: number) => {
     try {
       const docResponse = await axios.get(`${API_BASE_URL}/api/documents/${documentId}`);
@@ -85,38 +90,39 @@ const DocumentView: React.FC = () => {
     }
   };
 
-  // Create a new session for document
-  const createSession = async (documentId: number) => {
-    try {
-      const response = await axios.post(`${API_BASE_URL}/api/sessions/?document_id=${documentId}`);
-      setCurrentSession(response.data);
-      return response.data.session_id;
-    } catch (err) {
-      console.error('Error creating session:', err);
-      setError('Failed to create a new session');
-      return null;
-    }
-  };
-
-  // Handle document selection
   const handleDocumentSelect = async (documentId: number) => {
     await fetchDocumentDetails(documentId);
-    await createSession(documentId);
+    setSearchMode('single');
+    setViewMode('chat');
   };
 
-  // Handle file input change
+  const handleAllDocsView = () => {
+    setViewMode('allDocs');
+    setSearchMode('all');
+    setSelectedDocument(null);
+    fetchAllDocsQueries();
+  };
+
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
-      setFile(e.target.files[0]);
+      const selectedFile = e.target.files[0];
+      setFile(selectedFile);
+      
+      if (!documentTitle) {
+        const autoTitle = selectedFile.name
+          .replace('.pdf', '')
+          .replace(/_/g, ' ')
+          .replace(/-/g, ' ');
+        setDocumentTitle(autoTitle);
+      }
     }
   };
 
-  // Handle document upload
   const handleUpload = async (e: React.FormEvent) => {
     e.preventDefault();
     
-    if (!file || !documentTitle) {
-      setError('Please provide both a title and a PDF file');
+    if (!file) {
+      setError('Please select a PDF file');
       return;
     }
     
@@ -131,7 +137,9 @@ const DocumentView: React.FC = () => {
     try {
       const formData = new FormData();
       formData.append('file', file);
-      formData.append('title', documentTitle);
+      if (documentTitle.trim()) {
+        formData.append('title', documentTitle);
+      }
       
       const response = await axios.post(`${API_BASE_URL}/api/documents/`, formData, {
         headers: {
@@ -139,14 +147,9 @@ const DocumentView: React.FC = () => {
         }
       });
       
-      // Refresh document list
       fetchDocuments();
-      
-      // Clear form
       setFile(null);
       setDocumentTitle('');
-      
-      // Select the newly uploaded document
       handleDocumentSelect(response.data.id);
       
     } catch (err) {
@@ -157,11 +160,10 @@ const DocumentView: React.FC = () => {
     }
   };
   
-  // Submit a question in session
   const handleQuestionSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
-    if (!question.trim() || !currentSession || !selectedDocument) {
+    if (!question.trim()) {
       return;
     }
     
@@ -169,51 +171,142 @@ const DocumentView: React.FC = () => {
     setError(null);
     
     try {
-      // Add the question to UI immediately for better UX
       const tempQuery: Query = {
-        id: -Date.now(), // Temporary negative ID
+        id: -Date.now(),
         question: question,
         answer: '...',
-        document_id: selectedDocument.id,
-        timestamp: new Date().toISOString(),
+        document_id: (searchMode === 'single' && selectedDocument) ? selectedDocument.id : null,
         created_at: new Date().toISOString(),
       };
       
-      setDocumentQueries([...documentQueries, tempQuery]);
+      // If in allDocs view or searchMode is 'all', always use allDocsQueries
+      if (viewMode === 'allDocs' || searchMode === 'all') {
+        setAllDocsQueries([...allDocsQueries, tempQuery]);
+      } else {
+        setDocumentQueries([...documentQueries, tempQuery]);
+      }
       
       const formData = new FormData();
       formData.append('question', question);
       
-      const response = await axios.post(
-        `${API_BASE_URL}/api/sessions/${currentSession.session_id}/query`, 
-        formData
-      );
+      let response;
       
-      // Replace the temp query with the real one
-      setDocumentQueries(queries => 
-        queries.filter(q => q.id !== tempQuery.id).concat(response.data)
-      );
+      // If in allDocs view or searchMode is 'all', use query-all endpoint
+      if (viewMode === 'allDocs' || searchMode === 'all') {
+        response = await axios.post(`${API_BASE_URL}/api/query-all/`, formData);
+        setAllDocsQueries(queries => 
+          queries.filter(q => q.id !== tempQuery.id).concat(response!.data)
+        );
+      } else if (selectedDocument) {
+        const jsonData = {
+          question: question,
+          document_id: selectedDocument.id
+        };
+        response = await axios.post(`${API_BASE_URL}/api/query/`, jsonData, {
+          headers: { 'Content-Type': 'application/json' }
+        });
+        setDocumentQueries(queries => 
+          queries.filter(q => q.id !== tempQuery.id).concat(response!.data)
+        );
+      }
       
-      // Clear question input
       setQuestion('');
       
     } catch (err) {
       console.error('Error submitting question:', err);
       setError('Failed to process your question');
-      
-      // Remove the temporary query on error
-      setDocumentQueries(queries => 
-        queries.filter(q => q.id !== -Date.now())
-      );
+      if (viewMode === 'allDocs' || searchMode === 'all') {
+        setAllDocsQueries(queries => queries.filter(q => q.id < 0));
+      } else {
+        setDocumentQueries(queries => queries.filter(q => q.id < 0));
+      }
     } finally {
       setLoading(false);
     }
   };
 
-  // Format date string
   const formatDate = (dateStr: string) => {
     if (!dateStr) return "Unknown date";
     return new Date(dateStr).toLocaleString();
+  };
+
+  const renderQueryList = (queries: Query[]) => {
+    if (queries.length === 0) {
+      return (
+        <div className="flex items-center justify-center h-full">
+          <div className="text-center p-8 bg-white rounded-lg shadow-lg max-w-md">
+            <p className="text-gray-600 text-lg">
+              {viewMode === 'allDocs' 
+                ? 'No questions asked across all documents yet. Start asking below!'
+                : searchMode === 'all' 
+                  ? 'Ask questions across all your documents'
+                  : 'Ask questions about this document'}
+            </p>
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <div className="space-y-6">
+        {queries.map((query) => (
+          <div key={query.id} className="space-y-3">
+            <div className="flex justify-end">
+              <div className="bg-gradient-to-r from-indigo-500 to-purple-600 text-white p-4 rounded-xl rounded-tr-none shadow-md max-w-2xl">
+                <p>{query.question}</p>
+                <div className="text-xs opacity-75 text-right mt-1">
+                  {formatDate(query.created_at)}
+                </div>
+              </div>
+            </div>
+            
+            <div className="flex justify-start">
+              <div className="bg-white p-4 rounded-xl rounded-tl-none shadow-md max-w-2xl border-l-4 border-blue-500">
+                {query.answer === '...' ? (
+                  <div className="flex space-x-2 p-2">
+                    <div className="w-3 h-3 bg-blue-400 rounded-full animate-bounce"></div>
+                    <div className="w-3 h-3 bg-indigo-400 rounded-full animate-bounce delay-100"></div>
+                    <div className="w-3 h-3 bg-purple-400 rounded-full animate-bounce delay-200"></div>
+                  </div>
+                ) : (
+                  <div>
+                    <p className="text-gray-800 whitespace-pre-line">{query.answer}</p>
+                    
+                    {/* {query.sources && query.sources.length > 0 && (
+                      <div className="mt-4 pt-4 border-t border-gray-200">
+                        <p className="text-sm font-semibold text-gray-700 mb-2">Sources:</p>
+                        <div className="space-y-2">
+                          {query.sources.map((source, idx) => (
+                            <div key={idx} className="flex items-center text-sm">
+                              <span className="inline-block w-2 h-2 bg-blue-500 rounded-full mr-2"></span>
+                              <span className="text-indigo-700 font-medium">{source.document_title}</span>
+                              <span className="ml-2 text-gray-500">
+                                (relevance: {(source.relevance_score * 100).toFixed(0)}%)
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )} */}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  };
+
+  // Helper function to determine if input should be shown
+  const shouldShowInput = () => {
+    if (viewMode === 'allDocs') {
+      return true; // Always show in allDocs view
+    }
+    if (viewMode === 'chat') {
+      return true; // Always show in chat view
+    }
+    return false;
   };
 
   return (
@@ -224,24 +317,14 @@ const DocumentView: React.FC = () => {
       </header>
       
       <div className="flex flex-1 overflow-hidden">
-        {/* Sidebar with document list */}
         <aside className="w-80 bg-white p-5 border-r shadow-md overflow-y-auto">
           <h2 className="text-xl font-semibold mb-5 text-indigo-800">My Documents</h2>
           
-          {/* Upload form */}
           <form onSubmit={handleUpload} className="mb-6 p-4 bg-gradient-to-br from-indigo-50 to-purple-50 rounded-lg shadow">
             <h3 className="text-lg font-medium mb-3 text-purple-700">Upload New Document</h3>
+            
             <div className="mb-3">
-              <input
-                type="text"
-                placeholder="Document Title"
-                value={documentTitle}
-                onChange={(e) => setDocumentTitle(e.target.value)}
-                className="w-full p-2 border border-purple-200 rounded focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 outline-none transition-all"
-                required
-              />
-            </div>
-            <div className="mb-3">
+              <label className="block text-sm font-medium text-gray-700 mb-1">Select PDF</label>
               <input
                 type="file"
                 accept=".pdf"
@@ -250,6 +333,20 @@ const DocumentView: React.FC = () => {
                 required
               />
             </div>
+            
+            <div className="mb-3">
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Document Title (optional)
+              </label>
+              <input
+                type="text"
+                placeholder="Auto-filled from filename"
+                value={documentTitle}
+                onChange={(e) => setDocumentTitle(e.target.value)}
+                className="w-full p-2 border border-purple-200 rounded focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 outline-none transition-all"
+              />
+            </div>
+            
             <button
               type="submit"
               disabled={uploading}
@@ -259,7 +356,27 @@ const DocumentView: React.FC = () => {
             </button>
           </form>
           
-          {/* Document list */}
+          <div 
+            onClick={handleAllDocsView}
+            className={`p-4 mb-4 cursor-pointer rounded-lg transition-all hover:shadow-md ${
+              viewMode === 'allDocs'
+                ? 'bg-gradient-to-r from-purple-100 to-pink-100 border-l-4 border-purple-500'
+                : 'bg-gradient-to-r from-blue-50 to-indigo-50 hover:from-blue-100 hover:to-indigo-100 shadow'
+            }`}
+          >
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="font-semibold text-purple-800">📚 All Documents Q&A</div>
+                <div className="text-xs text-gray-600 mt-1">
+                  {allDocsQueries.length} multi-doc {allDocsQueries.length === 1 ? 'query' : 'queries'}
+                </div>
+              </div>
+              <div className="text-2xl">
+                {viewMode === 'allDocs' ? '▶' : '▷'}
+              </div>
+            </div>
+          </div>
+          
           <div className="space-y-3">
             {documents.length === 0 ? (
               <p className="text-gray-500 italic text-center py-6">No documents uploaded yet</p>
@@ -269,172 +386,131 @@ const DocumentView: React.FC = () => {
                   key={doc.id}
                   onClick={() => handleDocumentSelect(doc.id)}
                   className={`p-3 cursor-pointer rounded-lg transition-all hover:shadow-md ${
-                    selectedDocument?.id === doc.id 
+                    selectedDocument?.id === doc.id && viewMode === 'chat'
                       ? 'bg-gradient-to-r from-indigo-100 to-purple-100 border-l-4 border-indigo-500' 
                       : 'bg-white hover:bg-indigo-50 shadow'
                   }`}
-                >
-                  <div className="font-medium text-indigo-800">{doc.title}</div>
-                  <div className="text-xs text-gray-500 mt-1">
-                    <span className="block">Created: {formatDate(doc.created_at)}</span>
-                    <span className="block">Size: {Math.round(doc.file_size / 1024)} KB</span>
-                  </div>
-                </div>
+      >
+        <div className="font-medium text-indigo-800">{doc.title}</div>
+        <div className="text-xs text-gray-500 mt-1">
+          <span className="block">Created: {formatDate(doc.created_at)}</span>
+          <span className="block">Size: {Math.round(doc.file_size / 1024)} KB</span>
+        </div>
+        {/* <a
+          href={doc.cloudinary_url}
+          target="_blank"
+          rel="noopener noreferrer"
+          onClick={(e) => e.stopPropagation()}
+          className="mt-2 inline-block w-full text-center bg-indigo-500 hover:bg-indigo-600 text-white text-xs py-1.5 px-3 rounded transition-colors"
+        >
+          📄 See Original PDF
+        </a> */}
+      </div>
               ))
             )}
           </div>
+          
         </aside>
         
-        {/* Main content area */}
         <main className="flex-1 flex flex-col overflow-hidden bg-white shadow-inner">
-          {selectedDocument ? (
-            <>
-              {/* Document details */}
-              <div className="bg-gradient-to-r from-blue-50 to-indigo-50 p-5 border-b shadow-sm">
-                <h2 className="text-2xl font-bold text-indigo-800">{selectedDocument.title}</h2>
-                <div className="mt-2 text-sm text-gray-600">
-                  <p>
-                    <span className="font-medium">Filename:</span> {selectedDocument.filename}
-                  </p>
-                  <p>
-                    <span className="font-medium">Created:</span> {formatDate(selectedDocument.created_at)}
-                  </p>
-                  <p>
-                    <span className="font-medium">Size:</span> {Math.round(selectedDocument.file_size / 1024)} KB
-                  </p>
+          <div className="bg-gradient-to-r from-blue-50 to-indigo-50 p-4 border-b flex items-center justify-between">
+            <div>
+              <h2 className="text-xl font-bold text-indigo-800">
+                {viewMode === 'allDocs' 
+                  ? '📚 All Documents Q&A' 
+                  : searchMode === 'all' 
+                    ? 'Search All Documents' 
+                    : selectedDocument?.title || 'No Document Selected'}
+              </h2>
+              {selectedDocument && searchMode === 'single' && viewMode === 'chat' && (
+                <div className="text-sm text-gray-600 mt-1">
+                  <span>{Math.round(selectedDocument.file_size / 1024)} KB</span>
                 </div>
-                <a 
-                  href={selectedDocument.cloudinary_url} 
-                  target="_blank" 
-                  rel="noopener noreferrer"
-                  className="inline-block mt-3 px-4 py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600 transition shadow-sm"
+              )}
+              {viewMode === 'allDocs' && (
+                <div className="text-sm text-gray-600 mt-1">
+                  Ask questions across all documents & view history
+                </div>
+              )}
+            </div>
+            
+            {viewMode === 'chat' && (
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setSearchMode('all')}
+                  className={`px-4 py-2 rounded-md transition ${
+                    searchMode === 'all'
+                      ? 'bg-indigo-600 text-white'
+                      : 'bg-white text-indigo-600 border border-indigo-300 hover:bg-indigo-50'
+                  }`}
                 >
-                  View Original PDF
-                </a>
+                  All Docs
+                </button>
+                <button
+                  onClick={() => setSearchMode('single')}
+                  disabled={!selectedDocument}
+                  className={`px-4 py-2 rounded-md transition ${
+                    searchMode === 'single'
+                      ? 'bg-indigo-600 text-white'
+                      : 'bg-white text-indigo-600 border border-indigo-300 hover:bg-indigo-50 disabled:opacity-50'
+                  }`}
+                >
+                  This Doc
+                </button>
               </div>
-              
-              {/* Chat interface */}
-              <div 
-                ref={chatContainerRef}
-                className="flex-1 overflow-y-auto p-6 bg-gradient-to-br from-slate-50 to-blue-50"
-              >
-                {documentQueries.length === 0 ? (
-                  <div className="flex items-center justify-center h-full">
-                    <div className="text-center p-8 bg-white rounded-lg shadow-lg max-w-md">
-                      <div className="text-blue-500 mb-4">
-                        <svg xmlns="http://www.w3.org/2000/svg" className="h-12 w-12 mx-auto" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                        </svg>
-                      </div>
-                      <p className="text-gray-600 text-lg">
-                        Ask questions about this document to get started
-                      </p>
-                      <p className="text-gray-500 text-sm mt-2">
-                        Your questions and answers will appear here
-                      </p>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="space-y-6">
-                    {documentQueries.map((query) => (
-                      <div key={query.id} className="space-y-3">
-                        {/* Question */}
-                        <div className="flex justify-end">
-                          <div className="bg-gradient-to-r from-indigo-500 to-purple-600 text-white p-4 rounded-xl rounded-tr-none shadow-md max-w-lg">
-                            <p>{query.question}</p>
-                            <div className="text-xs opacity-75 text-right mt-1">
-                              {query.created_at && formatDate(query.created_at)}
-                            </div>
-                          </div>
-                        </div>
-                        
-                        {/* Answer */}
-                        <div className="flex justify-start">
-                          <div className="bg-white p-4 rounded-xl rounded-tl-none shadow-md max-w-lg border-l-4 border-blue-500">
-                            {query.answer === '...' ? (
-                              <div className="flex space-x-2 p-2">
-                                <div className="w-3 h-3 bg-blue-400 rounded-full animate-bounce"></div>
-                                <div className="w-3 h-3 bg-indigo-400 rounded-full animate-bounce delay-100"></div>
-                                <div className="w-3 h-3 bg-purple-400 rounded-full animate-bounce delay-200"></div>
-                              </div>
-                            ) : (
-                              <div>
-                                <p className="text-gray-800">{query.answer}</p>
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-              
-              {/* Question input */}
-              <div className="bg-white p-4 border-t shadow-inner">
-                <form onSubmit={handleQuestionSubmit} className="flex">
-                  <input
-                    type="text"
-                    value={question}
-                    onChange={(e) => setQuestion(e.target.value)}
-                    placeholder="Ask a question about this document..."
-                    className="flex-1 p-3 border border-indigo-200 rounded-l-lg focus:outline-none focus:ring-2 focus:ring-indigo-300 focus:border-indigo-500"
-                    disabled={loading}
-                    required
-                  />
-                  <button
-                    type="submit"
-                    className="bg-gradient-to-r from-indigo-600 to-purple-600 text-white px-6 py-3 rounded-r-lg hover:opacity-90 transition-all disabled:opacity-70 shadow-md flex items-center justify-center"
-                    disabled={loading || !question.trim()}
-                  >
-                    {loading ? (
-                      <span className="flex items-center">
-                        <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                        </svg>
-                        Thinking...
-                      </span>
-                    ) : (
-                      <span className="flex items-center">
-                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
-                        </svg>
-                        Ask
-                      </span>
-                    )}
-                  </button>
-                </form>
-              </div>
-            </>
-          ) : (
-            <div className="flex items-center justify-center h-full bg-gradient-to-br from-slate-50 to-blue-50">
-              <div className="text-center p-10 bg-white rounded-xl shadow-lg max-w-md">
-                <div className="text-indigo-500 mb-6">
-                  <svg xmlns="http://www.w3.org/2000/svg" className="h-16 w-16 mx-auto" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                  </svg>
-                </div>
-                <h3 className="text-2xl font-semibold mb-3 text-indigo-800">No Document Selected</h3>
-                <p className="text-gray-600">
-                  Select a document from the sidebar or upload a new one to get started
-                </p>
-              </div>
+            )}
+          </div>
+          
+          <div 
+            ref={chatContainerRef}
+            className="flex-1 overflow-y-auto p-6 bg-gradient-to-br from-slate-50 to-blue-50"
+          >
+            {viewMode === 'allDocs' 
+              ? renderQueryList(allDocsQueries)
+              : searchMode === 'all'
+                ? renderQueryList(allDocsQueries)
+                : renderQueryList(documentQueries)
+            }
+          </div>
+          
+          {/* Always show input - simplified condition */}
+          {shouldShowInput() && (
+            <div className="bg-white p-4 border-t shadow-inner">
+              <form onSubmit={handleQuestionSubmit} className="flex">
+                <input
+                  type="text"
+                  value={question}
+                  onChange={(e) => setQuestion(e.target.value)}
+                  placeholder={
+                    viewMode === 'allDocs' 
+                      ? "Ask about all documents..." 
+                      : searchMode === 'all' 
+                        ? "Ask about any document..." 
+                        : "Ask about this document..."
+                  }
+                  className="flex-1 p-3 border border-indigo-200 rounded-l-lg focus:outline-none focus:ring-2 focus:ring-indigo-300 focus:border-indigo-500"
+                  disabled={loading}
+                  required
+                />
+                <button
+                  type="submit"
+                  className="bg-gradient-to-r from-indigo-600 to-purple-600 text-white px-6 py-3 rounded-r-lg hover:opacity-90 transition-all disabled:opacity-70 shadow-md"
+                  disabled={loading || !question.trim()}
+                >
+                  {loading ? 'Thinking...' : 'Ask'}
+                </button>
+              </form>
             </div>
           )}
         </main>
       </div>
       
-      {/* Error message */}
       {error && (
         <div className="fixed bottom-6 right-6 bg-gradient-to-r from-red-500 to-pink-500 text-white p-4 rounded-lg shadow-lg flex items-center">
-          <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-          </svg>
           {error}
           <button 
             onClick={() => setError(null)}
-            className="ml-4 font-bold text-xl leading-none"
+            className="ml-4 font-bold text-xl"
           >
             ×
           </button>
@@ -445,398 +521,3 @@ const DocumentView: React.FC = () => {
 };
 
 export default DocumentView;
-// import React, { useState, useEffect, useRef } from 'react';
-// import axios from 'axios';
-
-// // Type definitions
-// interface Document {
-//   id: number;
-//   title: string;
-//   filename: string;
-//   cloudinary_url: string;
-//   public_id: string;
-//   file_size: number;
-//   mime_type: string;
-//   upload_date: string;
-//   user_id: number;
-// }
-
-// interface Query {
-//   id: number;
-//   question: string;
-//   answer: string;
-//   document_id: number;
-//   timestamp: string;
-//   session_id?: number;
-// }
-
-// interface Session {
-//   session_id: string;
-//   document_id: number;
-// }
-
-// const DocumentView: React.FC = () => {
-//   // State variables
-//   const [documents, setDocuments] = useState<Document[]>([]);
-//   const [selectedDocument, setSelectedDocument] = useState<Document | null>(null);
-//   const [documentQueries, setDocumentQueries] = useState<Query[]>([]);
-//   const [currentSession, setCurrentSession] = useState<Session | null>(null);
-//   const [question, setQuestion] = useState('');
-//   const [loading, setLoading] = useState(false);
-//   const [file, setFile] = useState<File | null>(null);
-//   const [documentTitle, setDocumentTitle] = useState('');
-//   const [uploading, setUploading] = useState(false);
-//   const [error, setError] = useState<string | null>(null);
-  
-//   const chatContainerRef = useRef<HTMLDivElement>(null);
-
-//   // API base URL
-//   const API_BASE_URL =  'http://localhost:8000/api';
-
-//   // Fetch all documents on component mount
-//   useEffect(() => {
-//     fetchDocuments();
-//   }, []);
-
-//   // Scroll to bottom of chat when queries change
-//   useEffect(() => {
-//     if (chatContainerRef.current) {
-//       chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
-//     }
-//   }, [documentQueries]);
-
-//   // Fetch all documents
-//   const fetchDocuments = async () => {
-//     try {
-//       const response = await axios.get(`${API_BASE_URL}/documents/`);
-//       setDocuments(response.data);
-//     } catch (err) {
-//       console.error('Error fetching documents:', err);
-//       setError('Failed to load documents');
-//     }
-//   };
-
-//   // Fetch a specific document's details and its queries
-//   const fetchDocumentDetails = async (documentId: number) => {
-//     try {
-//       const docResponse = await axios.get(`${API_BASE_URL}/documents/${documentId}`);
-//       setSelectedDocument(docResponse.data);
-      
-//       const queriesResponse = await axios.get(`${API_BASE_URL}/queries/${documentId}`);
-//       setDocumentQueries(queriesResponse.data);
-//     } catch (err) {
-//       console.error('Error fetching document details:', err);
-//       setError('Failed to load document details');
-//     }
-//   };
-
-//   // Create a new session for document
-//   const createSession = async (documentId: number) => {
-//     try {
-//       const response = await axios.post(`${API_BASE_URL}/sessions/?document_id=${documentId}`);
-//         //document_id: documentId});
-//       setCurrentSession(response.data);
-//       return response.data.session_id;
-//     } catch (err) {
-//       console.error('Error creating session:', err);
-//       setError('Failed to create a new session');
-//       return null;
-//     }
-//   };
-
-//   // Handle document selection
-//   const handleDocumentSelect = async (documentId: number) => {
-//     await fetchDocumentDetails(documentId);
-//     await createSession(documentId);
-//   };
-
-//   // Handle file input change
-//   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-//     if (e.target.files && e.target.files[0]) {
-//       setFile(e.target.files[0]);
-//     }
-//   };
-
-//   // Handle document upload
-//   const handleUpload = async (e: React.FormEvent) => {
-//     e.preventDefault();
-    
-//     if (!file || !documentTitle) {
-//       setError('Please provide both a title and a PDF file');
-//       return;
-//     }
-    
-//     if (!file.name.endsWith('.pdf')) {
-//       setError('Only PDF files are allowed');
-//       return;
-//     }
-    
-//     setUploading(true);
-//     setError(null);
-    
-//     try {
-//       const formData = new FormData();
-//       formData.append('file', file);
-//       formData.append('title', documentTitle);
-      
-//       const response = await axios.post(`${API_BASE_URL}/documents/`, formData, {
-//         headers: {
-//           'Content-Type': 'multipart/form-data'
-//         }
-//       });
-      
-//       // Refresh document list
-//       fetchDocuments();
-      
-//       // Clear form
-//       setFile(null);
-//       setDocumentTitle('');
-      
-//       // Select the newly uploaded document
-//       handleDocumentSelect(response.data.id);
-      
-//     } catch (err) {
-//       console.error('Error uploading document:', err);
-//       setError('Failed to upload document');
-//     } finally {
-//       setUploading(false);
-//     }
-//   };
-  
-//   // Submit a question in session
-//   const handleQuestionSubmit = async (e: React.FormEvent) => {
-//     e.preventDefault();
-    
-//     if (!question.trim() || !currentSession || !selectedDocument) {
-//       return;
-//     }
-    
-//     setLoading(true);
-//     setError(null);
-    
-//     try {
-//       // Add the question to UI immediately for better UX
-//       const tempQuery: Query = {
-//         id: -Date.now(), // Temporary negative ID
-//         question: question,
-//         answer: '...',
-//         document_id: selectedDocument.id,
-//         timestamp: new Date().toISOString(),
-//       };
-      
-//       setDocumentQueries([...documentQueries, tempQuery]);
-      
-//       const formData = new FormData();
-//       formData.append('question', question);
-      
-//       const response = await axios.post(
-//         `${API_BASE_URL}/sessions/${currentSession.session_id}/query`, 
-//         formData
-//       );
-      
-//       // Replace the temp query with the real one
-//       setDocumentQueries(queries => 
-//         queries.filter(q => q.id !== tempQuery.id).concat(response.data)
-//       );
-      
-//       // Clear question input
-//       setQuestion('');
-      
-//     } catch (err) {
-//       console.error('Error submitting question:', err);
-//       setError('Failed to process your question');
-      
-//       // Remove the temporary query on error
-//       setDocumentQueries(queries => 
-//         queries.filter(q => q.id !== -Date.now())
-//       );
-//     } finally {
-//       setLoading(false);
-//     }
-//   };
-
-//   // Format date string
-//   const formatDate = (dateStr: string) => {
-//     return new Date(dateStr).toLocaleString();
-//   };
-
-//   return (
-//     <div className="flex flex-col min-h-screen bg-gray-100">
-//       <header className="bg-blue-600 text-white p-4">
-//         <h1 className="text-2xl font-bold">PDF Document Q&A System</h1>
-//       </header>
-      
-//       <div className="flex flex-1 overflow-hidden">
-//         {/* Sidebar with document list */}
-//         <aside className="w-64 bg-white p-4 border-r overflow-y-auto">
-//           <h2 className="text-lg font-semibold mb-4">My Documents</h2>
-          
-//           {/* Upload form */}
-//           <form onSubmit={handleUpload} className="mb-6 p-3 bg-gray-50 rounded">
-//             <h3 className="text-md font-medium mb-2">Upload New Document</h3>
-//             <div className="mb-2">
-//               <input
-//                 type="text"
-//                 placeholder="Document Title"
-//                 value={documentTitle}
-//                 onChange={(e) => setDocumentTitle(e.target.value)}
-//                 className="w-full p-2 border rounded"
-//                 required
-//               />
-//             </div>
-//             <div className="mb-2">
-//               <input
-//                 type="file"
-//                 accept=".pdf"
-//                 onChange={handleFileChange}
-//                 className="w-full text-sm"
-//                 required
-//               />
-//             </div>
-//             <button
-//               type="submit"
-//               disabled={uploading}
-//               className="w-full bg-blue-500 text-white p-2 rounded hover:bg-blue-600 disabled:bg-blue-300"
-//             >
-//               {uploading ? 'Uploading...' : 'Upload'}
-//             </button>
-//           </form>
-          
-//           {/* Document list */}
-//           <ul className="space-y-2">
-//             {documents.length === 0 ? (
-//               <p className="text-gray-500 italic">No documents uploaded yet</p>
-//             ) : (
-//               documents.map((doc) => (
-//                 <li 
-//                   key={doc.id}
-//                   onClick={() => handleDocumentSelect(doc.id)}
-//                   className={`p-2 cursor-pointer hover:bg-gray-100 rounded ${
-//                     selectedDocument?.id === doc.id ? 'bg-blue-100' : ''
-//                   }`}
-//                 >
-//                   <div className="font-medium">{doc.title}</div>
-//                   <div className="text-xs text-gray-500">
-//                     {formatDate(doc.upload_date)}
-//                   </div>
-//                 </li>
-//               ))
-//             )}
-//           </ul>
-//         </aside>
-        
-//         {/* Main content area */}
-//         <main className="flex-1 flex flex-col overflow-hidden">
-//           {selectedDocument ? (
-//             <>
-//               {/* Document details */}
-//               <div className="bg-white p-4 border-b">
-//                 <h2 className="text-xl font-bold">{selectedDocument.title}</h2>
-//                 <p className="text-sm text-gray-500">
-//                   Filename: {selectedDocument.filename} | 
-//                   Size: {Math.round(selectedDocument.file_size / 1024)} KB
-//                 </p>
-//                 <a 
-//                   href={selectedDocument.cloudinary_url} 
-//                   target="_blank" 
-//                   rel="noopener noreferrer"
-//                   className="text-blue-500 hover:underline text-sm"
-//                 >
-//                   View Original PDF
-//                 </a>
-//               </div>
-              
-//               {/* Chat interface */}
-//               <div 
-//                 ref={chatContainerRef}
-//                 className="flex-1 overflow-y-auto p-4 bg-gray-50"
-//               >
-//                 {documentQueries.length === 0 ? (
-//                   <div className="flex items-center justify-center h-full">
-//                     <p className="text-gray-500">
-//                       Ask questions about this document to get started
-//                     </p>
-//                   </div>
-//                 ) : (
-//                   <div className="space-y-4">
-//                     {documentQueries.map((query) => (
-//                       <div key={query.id} className="space-y-2">
-//                         {/* Question */}
-//                         <div className="flex justify-end">
-//                           <div className="bg-blue-500 text-white p-3 rounded-lg max-w-3/4">
-//                             {query.question}
-//                           </div>
-//                         </div>
-                        
-//                         {/* Answer */}
-//                         <div className="flex justify-start">
-//                           <div className="bg-white p-3 rounded-lg shadow max-w-3/4">
-//                             {query.answer === '...' ? (
-//                               <div className="flex space-x-1">
-//                                 <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"></div>
-//                                 <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce delay-100"></div>
-//                                 <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce delay-200"></div>
-//                               </div>
-//                             ) : (
-//                               query.answer
-//                             )}
-//                           </div>
-//                         </div>
-//                       </div>
-//                     ))}
-//                   </div>
-//                 )}
-//               </div>
-              
-//               {/* Question input */}
-//               <div className="bg-white p-4 border-t">
-//                 <form onSubmit={handleQuestionSubmit} className="flex">
-//                   <input
-//                     type="text"
-//                     value={question}
-//                     onChange={(e) => setQuestion(e.target.value)}
-//                     placeholder="Ask a question about this document..."
-//                     className="flex-1 p-2 border rounded-l"
-//                     disabled={loading}
-//                     required
-//                   />
-//                   <button
-//                     type="submit"
-//                     className="bg-blue-500 text-white p-2 rounded-r hover:bg-blue-600 disabled:bg-blue-300"
-//                     disabled={loading || !question.trim()}
-//                   >
-//                     {loading ? 'Thinking...' : 'Ask'}
-//                   </button>
-//                 </form>
-//               </div>
-//             </>
-//           ) : (
-//             <div className="flex items-center justify-center h-full">
-//               <div className="text-center p-8">
-//                 <h3 className="text-xl font-medium mb-2">No Document Selected</h3>
-//                 <p className="text-gray-500">
-//                   Select a document from the sidebar or upload a new one to get started
-//                 </p>
-//               </div>
-//             </div>
-//           )}
-//         </main>
-//       </div>
-      
-//       {/* Error message */}
-//       {error && (
-//         <div className="fixed bottom-4 right-4 bg-red-500 text-white p-3 rounded shadow">
-//           {error}
-//           <button 
-//             onClick={() => setError(null)}
-//             className="ml-2 font-bold"
-//           >
-//             ×
-//           </button>
-//         </div>
-//       )}
-//     </div>
-//   );
-// };
-
-// export default DocumentView;

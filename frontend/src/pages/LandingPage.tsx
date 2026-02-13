@@ -51,7 +51,6 @@ export default function LandingPage() {
             <a href="#use-cases" className="text-slate-300 hover:text-white transition">Use Cases</a>
             <a href="#pricing" className="text-slate-300 hover:text-white transition">Pricing</a>
           </div>
-          <Button className="bg-indigo-600 hover:bg-indigo-700 text-white">Get Started</Button>
         </div>
       </header>
 

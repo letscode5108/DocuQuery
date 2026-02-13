@@ -42,7 +42,7 @@ class Query(Base):
     question = Column(Text)
     answer = Column(Text)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
-    document_id = Column(Integer, ForeignKey("documents.id"))
+    document_id = Column(Integer, ForeignKey("documents.id"), nullable=True)
     session_id = Column(Integer, ForeignKey("sessions.id"), nullable=True)
     
     document = relationship("Document", back_populates="queries")

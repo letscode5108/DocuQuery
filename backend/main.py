@@ -5,7 +5,7 @@ import cloudinary
 import os
 from dotenv import load_dotenv
 
-from database import engine, Base
+from database import engine, Base, SessionLocal
 from models import User, Document, Query, Session as models
 
 from router import router
@@ -22,6 +22,26 @@ cloudinary.config(
 
 # Create tables in the database
 Base.metadata.create_all(bind=engine)
+
+# Create default user if not exists
+db = SessionLocal()
+try:
+    default_user = db.query(User).filter(User.id == 1).first()
+    if not default_user:
+        default_user = User(
+            id=1,
+           
+        )
+        db.add(default_user)
+        db.commit()
+        print(" Default user created successfully")
+    else:
+        print(" Default user already exists")
+except Exception as e:
+    print(f" Error creating default user: {e}")
+    db.rollback()
+finally:
+    db.close()
 
 # Initialize FastAPI app
 app = FastAPI(title="PDF Question Answering API")

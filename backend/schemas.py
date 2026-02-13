@@ -37,7 +37,7 @@ class DocumentResponse(DocumentBase):
 
 class QueryBase(BaseModel):
     question: str
-    document_id: int
+    document_id: Optional[int] = None
 
 class QueryCreate(QueryBase):
     pass

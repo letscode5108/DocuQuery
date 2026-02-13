@@ -1,174 +1,105 @@
-# DocuQuery
+# PDF Document Q&A System
 
-A full-stack application that allows users to upload PDF documents and ask questions about their content using AI-powered natural language processing.
+A full-stack web application that allows users to upload PDF documents and ask questions about their content using AI-powered semantic search.
 
+## 🌟 Features
 
+- Upload multiple PDF documents
+- Ask questions across all documents or specific documents
+- AI-powered answers with source attribution
+- View relevance scores for each source
+- Beautiful, responsive UI
 
-## Features
+## 🛠️ Tech Stack
 
-- **PDF Upload**: Upload and store PDF documents
-- **Document Management**: View, organize, and access your uploaded documents
-- **AI-Powered Q&A**: Ask questions about your documents and receive accurate answers
-- **Conversational Interface**: Follow-up questions and contextual understanding
-- **Multi-Document Analysis**: Connect information across multiple documents
-- **Semantic Search**: Find information based on meaning, not just keywords
+**Frontend:**
+- React + TypeScript
+- Vite
+- Tailwind CSS
+- Axios
 
-## Technologies Used
+**Backend:**
+- FastAPI (Python)
+- PostgreSQL (Neon)
+- Pinecone (Vector Database)
+- Google Gemini AI
+- Cloudinary (File Storage)
 
-### Backend
-- **Framework**: FastAPI
-- **NLP Processing**: LangChain
-- **Database**: PostgreSQL
-- **PDF Processing**: PyMuPDF
-- **FileStorage**: Cloudinary
+## 🚀 Live Demo
 
-### Frontend
-- **Framework**: React.js
-- **Styling**: Tailwind CSS, shadcn
+- **Frontend:** https://docu-query-qv4p.vercel.app/
+- **Backend:** https://docuquery-rcqs.onrender.com/
 
-
-## Setup Instructions
+## 📦 Installation & Setup
 
 ### Prerequisites
-- Python 3.8+
-- Node.js 14+ and npm
-- Git
-- Cloudinary
+- Node.js 18+
+- Python 3.11+
+- PostgreSQL database (or Neon account)
+- Google AI API key
+- Pinecone API key
+- Cloudinary account
+
 ### Backend Setup
+```bash
+cd backend
+python -m venv venv
+source venv/bin/activate  # Windows: venv\Scripts\activate
+pip install -r requirements.txt
+```
 
-1. Clone the repository
-   ```bash
-   git clone https://github.com/yourusername/pdf-qa-system.git
-   cd pdf-qa-system/backend
-   ```
+Create `.env` file:
+```env
+GOOGLE_API_KEY=your_key
+PINECONE_API_KEY=your_key
+CLOUDINARY_CLOUD_NAME=your_name
+CLOUDINARY_API_KEY=your_key
+CLOUDINARY_API_SECRET=your_secret
+DATABASE_URL=postgresql://...
+```
 
-2. Create and activate a virtual environment
-   ```bash
-   python -m venv venv
-   
-   # On Windows
-   venv\Scripts\activate
-   
-   # On macOS/Linux
-   source venv/bin/activate
-   ```
-
-3. Install dependencies
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-4. Set up environment variables
-   ```bash
-   # Create a .env file with the following variables
-   DATABASE_URL=postgresql:///./app.db
-   # Add any API keys for LLM services if needed
-   ```
-
-5. Initialize the database
-   ```bash
-   python init_db.py
-   ```
-
-6. Start the backend server
-   ```bash
-   uvicorn main:app --reload
-   ```
-   The backend will be running at http://localhost:8000
+Run:
+```bash
+uvicorn main:app --reload
+```
 
 ### Frontend Setup
-
-1. Navigate to the frontend directory
-   ```bash
-   cd ../frontend
-   ```
-
-2. Install dependencies
-   ```bash
-   npm install
-   ```
-
-3. Configure the API endpoint
-   ```bash
-   # Create a .env file with the backend URL
-   REACT_APP_API_URL=http://localhost:8000
-   ```
-
-4. Start the development server
-   ```bash
-   npm start
-   ```
-   The frontend will be running at http://localhost:3000
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+```bash
+cd frontend
+npm install
+```
+
+Create `.env`:
+```env
+VITE_API_URL=http://localhost:8000
+```
+
+Run:
+```bash
+npm run dev
+```
+
+## 📖 How It Works
+
+1. **Upload:** Users upload PDF documents
+2. **Process:** Backend extracts text and creates embeddings using Google Gemini
+3. **Store:** Embeddings stored in Pinecone vector database
+4. **Query:** User asks questions
+5. **Search:** System searches across all documents using semantic similarity
+6. **Answer:** Google Gemini generates answer with source attribution
+
+## ✅ What's Done
+
+- ✅ Full document upload system
+- ✅ Multi-document search
+- ✅ Source attribution with relevance scores
+- ✅ Single document Q&A mode
+- ✅ Responsive UI
+- ✅ Production deployment
+
+## ❌ What's Not Done
+
+- ❌ User authentication
+- ❌ Document deletion
+- ❌ File type validation beyond .pdf
+-

@@ -1,14 +1,50 @@
 import axios from 'axios';
 
-// Configure axios base URL
-const api = axios.create({
-  baseURL: `${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api`,
-  headers: {
-    'Content-Type': 'application/json',
-  },
+const API_BASE =  'http://localhost:8000/api';
+
+const api = axios.create({ baseURL: API_BASE });
+
+
+
+// ─── Attach JWT to every request ─────────────────────────────────────────────
+api.interceptors.request.use(config => {
+  const token = localStorage.getItem('token');
+  if (token) config.headers.Authorization = `Bearer ${token}`;
+  return config;
 });
 
-// Types
+// ─── Auth Types ───────────────────────────────────────────────────────────────
+export interface AuthResponse {
+  access_token: string;
+  token_type: string;
+}
+
+export interface RegisterResponse {
+  id: number;
+  email: string;
+}
+
+// ─── Auth API ─────────────────────────────────────────────────────────────────
+export const authApi = {
+  login: async (email: string, password: string): Promise<AuthResponse> => {
+    const fd = new FormData();
+    fd.append('username', email); // OAuth2PasswordRequestForm expects 'username'
+    fd.append('password', password);
+    const { data } = await api.post('/auth/token', fd);
+    return data;
+  },
+
+  register: async (email: string, password: string): Promise<RegisterResponse> => {
+    const { data } = await api.post(`/auth/register?email=${encodeURIComponent(email)}&password=${encodeURIComponent(password)}`);
+    return data;
+  },
+
+  logout: () => localStorage.removeItem('token'),
+
+  isLoggedIn: () => !!localStorage.getItem('token'),
+};
+
+// ... rest of your existing types and documentApi unchanged
 export interface Document {
   id: number;
   title: string;
@@ -25,71 +61,173 @@ export interface Query {
   id: number;
   question: string;
   answer: string;
-  document_id: number;
-  session_id?: number;
+  document_id: number | null;
   created_at: string;
 }
 
-export interface Session {
-  session_id: string;
-  document_id: number;
+export interface MediaQueryTimestamp {
+  start: number;
+  end: number;
+  display: string;
 }
 
-export interface QueryRequest {
+export interface MediaQueryResponse {
+  id: number;
+  question: string;
+  answer: string;
+  document_id: number;
+  timestamp: MediaQueryTimestamp;
+  cloudinary_url: string;
+  created_at: string;
+}
+
+export interface AllQuerySource {
+  document_id: number;
+  document_title: string;
+  filename: string;
+  relevance_score: number;
+  mime_type: string;
+  cloudinary_url: string;
+  timestamp: MediaQueryTimestamp | null;
+}
+
+export interface AllQueryResponse {
+  id: number;
+  question: string;
+  answer: string;
+  document_id: null;
+  created_at: string;
+  sources: AllQuerySource[];
+}
+
+export interface MediaUploadResponse {
+  id: number;
+  title: string;
+  filename: string;
+  cloudinary_url: string;
+  file_size: number;
+  mime_type: string;
+  media_type: 'audio' | 'video';
+  segment_count: number;
+  transcript_preview: string;
+  created_at: string;
+}
+
+export interface SummaryResponse {
+  document_id: number;
+  title: string;
+  mime_type: string;
+  summary: string;
+}
+
+export interface TimestampEntry {
+  start: number;
+  end: number;
+  display: string;
+  text: string;
+  relevance_score: number;
+  cloudinary_url: string;
+}
+
+export interface TimestampResponse {
+  topic: string;
+  document_id: number;
+  title: string;
+  timestamps: TimestampEntry[];
+}
+
+export interface QueryCreate {
   question: string;
   document_id: number;
 }
 
-// API functions
-export const documentApi = {
-  // Get all documents
-  getDocuments: async (): Promise<Document[]> => {
-    const response = await api.get('/documents/');
-    return response.data;
-  },
-  
-  // Get document by ID
-  getDocument: async (id: number): Promise<Document> => {
-    const response = await api.get(`/documents/${id}`);
-    return response.data;
-  },
-  
-  // Upload document
-  uploadDocument: async (formData: FormData): Promise<Document> => {
-    const response = await api.post('/documents/', formData, {
-      headers: {
-        'Content-Type': 'multipart/form-data',
-      },
-    });
-    return response.data;
-  },
-  
-  // Get queries for a document
-  getDocumentQueries: async (documentId: number): Promise<Query[]> => {
-    const response = await api.get(`/queries/${documentId}`);
-    return response.data;
-  },
-  
-  // Ask a question directly (not in a session)
-  askQuestion: async (query: QueryRequest): Promise<Query> => {
-    const response = await api.post('/query/', query);
-    return response.data;
-  },
-  
-  // Create a session
-  createSession: async (documentId: number): Promise<{ session_id: string; document_id: number }> => {
-    const response = await api.post('/sessions/', { document_id: documentId });
-    return response.data;
-  },
-  
-  // Ask a question in a session
-  askSessionQuestion: async (sessionId: string, question: string): Promise<Query> => {
-    const formData = new FormData();
-    formData.append('question', question);
-    
-    const response = await api.post(`/sessions/${sessionId}/query`, formData);
-    return response.data;
-  }
-};
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
-export default api;
+const AUDIO_MIMES = ['audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/m4a', 'audio/ogg', 'audio/flac', 'audio/webm'];
+const VIDEO_MIMES = ['video/mp4', 'video/mov', 'video/avi', 'video/mkv', 'video/webm', 'video/quicktime'];
+
+export const isMediaFile = (doc: Document): boolean =>
+  AUDIO_MIMES.some(m => doc.mime_type?.includes(m.split('/')[1])) ||
+  VIDEO_MIMES.some(m => doc.mime_type?.startsWith('video/')) ||
+  doc.mime_type?.startsWith('audio/');
+
+export const isVideoFile = (doc: Document): boolean =>
+  doc.mime_type?.startsWith('video/');
+
+// ─── API calls ────────────────────────────────────────────────────────────────
+
+export const documentApi = {
+  // Documents
+  getDocuments: async (): Promise<Document[]> => {
+    const { data } = await api.get('/documents/');
+    return data;
+  },
+
+  getDocument: async (id: number): Promise<Document> => {
+    const { data } = await api.get(`/documents/${id}`);
+    return data;
+  },
+
+  uploadDocument: async (formData: FormData): Promise<Document> => {
+    const { data } = await api.post('/documents/', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+    return data;
+  },
+
+  uploadMedia: async (formData: FormData): Promise<MediaUploadResponse> => {
+    const { data } = await api.post('/media/', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+    return data;
+  },
+
+  // Q&A
+  askQuestion: async (query: QueryCreate): Promise<Query> => {
+    const { data } = await api.post('/query/', query);
+    return data;
+  },
+
+  askMediaQuestion: async (documentId: number, question: string): Promise<MediaQueryResponse> => {
+    const fd = new FormData();
+    fd.append('document_id', String(documentId));
+    fd.append('question', question);
+    const { data } = await api.post('/query-media/', fd);
+    return data;
+  },
+
+  askAllDocuments: async (question: string): Promise<AllQueryResponse> => {
+    const fd = new FormData();
+    fd.append('question', question);
+    const { data } = await api.post('/query-all/', fd);
+    return data;
+  },
+
+  // Queries history
+  getDocumentQueries: async (documentId: number): Promise<Query[]> => {
+    const { data } = await api.get(`/queries/${documentId}`);
+    return data;
+  },
+
+  getAllDocsQueries: async (): Promise<AllQueryResponse[]> => {
+    const { data } = await api.get('/queries/all');
+    return data;
+  },
+
+  // Summarize
+  summarize: async (documentId: number): Promise<SummaryResponse> => {
+    const fd = new FormData();
+    fd.append('document_id', String(documentId));
+    const { data } = await api.post('/summarize/', fd);
+    return data;
+  },
+
+  // Timestamps
+  getTimestamps: async (documentId: number, topic: string): Promise<TimestampResponse> => {
+    const fd = new FormData();
+    fd.append('document_id', String(documentId));
+    fd.append('topic', topic);
+    const { data } = await api.post('/timestamps/', fd);
+    return data;
+  },
+};

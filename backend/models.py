@@ -43,11 +43,13 @@ class Query(Base):
     answer = Column(Text)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     document_id = Column(Integer, ForeignKey("documents.id"), nullable=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)  # ← ADD THIS
+
     session_id = Column(Integer, ForeignKey("sessions.id"), nullable=True)
-    
+    sources = Column(Text, nullable=True)  
     document = relationship("Document", back_populates="queries")
     session = relationship("Session", back_populates="queries")
-
+    user = relationship("User")  
 class Session(Base):
     __tablename__ = "sessions"
     

@@ -62,7 +62,7 @@ export default function LandingPage() {
             Transform Your Document Experience with AI-Powered Q&A
             </h2>
             <p className="text-xl text-slate-300 mb-8">
-            Unlock the knowledge hidden in your PDFs — get instant, AI-powered answers.
+            Unlock the knowledge hidden in your PDFs, Audio, and Videos — get instant, AI-powered answers.
             Upload your documents and let our AI deliver fast, accurate insights.
             </p>
             <div className="flex flex-col sm:flex-row gap-4">
@@ -108,7 +108,7 @@ export default function LandingPage() {
               </div>
               <h3 className="text-xl font-bold mb-3 text-white">Multi-Document Analysis</h3>
               <p className="text-slate-300">
-                Upload multiple PDFs and our system will analyze connections between documents to provide comprehensive answers.
+                Upload multiple PDFs,Audios and Videos and our system will analyze connections between documents to provide comprehensive answers.
               </p>
             </div>
             
@@ -144,7 +144,7 @@ export default function LandingPage() {
               <div className="flex flex-col items-center">
                 <div className="w-full max-w-md p-8 border-2 border-dashed border-slate-600 rounded-xl flex flex-col items-center justify-center bg-slate-800 hover:bg-slate-750 transition cursor-pointer">
                   <FileUp className="h-12 w-12 text-indigo-400 mb-4" />
-                  <p className="text-lg text-slate-300 mb-2">Drag and drop your PDF here</p>
+                  <p className="text-lg text-slate-300 mb-2">Drag and drop your PDF, Audio, or Video here</p>
                   <p className="text-sm text-slate-400">or</p>
                   <Button className="mt-4 bg-indigo-600 hover:bg-indigo-700">Browse files</Button>
                 </div>

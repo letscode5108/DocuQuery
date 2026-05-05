@@ -5,15 +5,35 @@ const API_BASE =  `${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/ap
 const api = axios.create({ baseURL: API_BASE });
 
 
-
-// ─── Attach JWT to every request ─────────────────────────────────────────────
 api.interceptors.request.use(config => {
   const token = localStorage.getItem('token');
   if (token) config.headers.Authorization = `Bearer ${token}`;
   return config;
 });
 
-// ─── Auth Types ───────────────────────────────────────────────────────────────
+
+api.interceptors.response.use(
+  response => response,
+  error => {
+    if (error.response?.status === 401) {
+      localStorage.removeItem('token');
+      window.location.href = '/auth';
+    }
+    return Promise.reject(error);
+  }
+);
+
+
+function isTokenExpired(token: string): boolean {
+  try {
+    const payload = JSON.parse(atob(token.split('.')[1]));
+    return payload.exp * 1000 < Date.now();
+  } catch {
+    return true;
+  }
+}
+
+
 export interface AuthResponse {
   access_token: string;
   token_type: string;
@@ -24,11 +44,11 @@ export interface RegisterResponse {
   email: string;
 }
 
-// ─── Auth API ─────────────────────────────────────────────────────────────────
+
 export const authApi = {
   login: async (email: string, password: string): Promise<AuthResponse> => {
     const fd = new FormData();
-    fd.append('username', email); // OAuth2PasswordRequestForm expects 'username'
+    fd.append('username', email);
     fd.append('password', password);
     const { data } = await api.post('/auth/token', fd);
     return data;
@@ -41,10 +61,18 @@ export const authApi = {
 
   logout: () => localStorage.removeItem('token'),
 
-  isLoggedIn: () => !!localStorage.getItem('token'),
+  
+  isLoggedIn: () => {
+    const token = localStorage.getItem('token');
+    if (!token) return false;
+    if (isTokenExpired(token)) {
+      localStorage.removeItem('token');
+      return false;
+    }
+    return true;
+  },
 };
 
-// ... rest of your existing types and documentApi unchanged
 export interface Document {
   id: number;
   title: string;
@@ -141,8 +169,6 @@ export interface QueryCreate {
   document_id: number;
 }
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
 const AUDIO_MIMES = ['audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/m4a', 'audio/ogg', 'audio/flac', 'audio/webm'];
 const VIDEO_MIMES = ['video/mp4', 'video/mov', 'video/avi', 'video/mkv', 'video/webm', 'video/quicktime'];
 
@@ -154,10 +180,8 @@ export const isMediaFile = (doc: Document): boolean =>
 export const isVideoFile = (doc: Document): boolean =>
   doc.mime_type?.startsWith('video/');
 
-// ─── API calls ────────────────────────────────────────────────────────────────
 
 export const documentApi = {
-  // Documents
   getDocuments: async (): Promise<Document[]> => {
     const { data } = await api.get('/documents/');
     return data;
@@ -182,7 +206,6 @@ export const documentApi = {
     return data;
   },
 
-  // Q&A
   askQuestion: async (query: QueryCreate): Promise<Query> => {
     const { data } = await api.post('/query/', query);
     return data;
@@ -203,7 +226,6 @@ export const documentApi = {
     return data;
   },
 
-  // Queries history
   getDocumentQueries: async (documentId: number): Promise<Query[]> => {
     const { data } = await api.get(`/queries/${documentId}`);
     return data;
@@ -214,7 +236,6 @@ export const documentApi = {
     return data;
   },
 
-  // Summarize
   summarize: async (documentId: number): Promise<SummaryResponse> => {
     const fd = new FormData();
     fd.append('document_id', String(documentId));
@@ -222,7 +243,6 @@ export const documentApi = {
     return data;
   },
 
-  // Timestamps
   getTimestamps: async (documentId: number, topic: string): Promise<TimestampResponse> => {
     const fd = new FormData();
     fd.append('document_id', String(documentId));

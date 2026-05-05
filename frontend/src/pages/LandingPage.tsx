@@ -66,7 +66,7 @@ export default function LandingPage() {
             Upload your documents and let our AI deliver fast, accurate insights.
             </p>
             <div className="flex flex-col sm:flex-row gap-4">
-              <Link to="/document" className='inline-block'>
+              <Link to="/auth" className='inline-block'>
               <Button className="bg-indigo-600 hover:bg-indigo-700 text-white text-lg py-6 px-8">
                 Try It Now <ArrowRight className="ml-2 h-5 w-5" />
               </Button>
